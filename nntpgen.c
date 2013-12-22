@@ -82,9 +82,10 @@ usage(p)
 	char const	*p;
 {
 	fprintf(stderr,
-"usage: %s [-V] [-c <conns>] [-n <lines>[-d <domain>] <server[:port]>\n"
+"usage: %s [-Vh] [-c <conns>] [-n <lines>[-d <domain>] <server[:port]>\n"
 "\n"
-"    -V                   print this text\n"
+"    -V                   print version\n"
+"    -h                   print this text\n"
 "    -d <domain>          use this string for message-id domain\n"
 "                         (default: %s)\n"
 "    -c <num>             number of connections to open\n"
@@ -103,7 +104,7 @@ int	 c, i;
 char	*progname = av[0], *p;
 struct addrinfo	*res, *r, hints;
 
-	while ((c = getopt(ac, av, "Vd:c:l:D")) != -1) {
+	while ((c = getopt(ac, av, "Vhd:c:l:D")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("nntpgen %s\n", PACKAGE_VERSION);

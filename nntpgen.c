@@ -165,7 +165,7 @@ struct addrinfo	*res, *r, hints;
 		port = strdup("119");
 	}
 
-	loop = ev_loop_new(ev_recommended_backends() | EVBACKEND_KQUEUE);
+	loop = ev_loop_new(ev_supported_backends());
 
 	bzero(&hints, sizeof(hints));
 	hints.ai_family = PF_UNSPEC;

@@ -365,7 +365,9 @@ conn_read(loop, w, revents)
 	struct ev_loop	*loop;
 	ev_io		*w;
 {
-conn_t	*cn = w->data;
+conn_t		*cn = w->data;
+thread_t	*th = cn->cn_thread;
+
 	for (;;) {
 	char	*ln;
 	ssize_t	 n;
@@ -431,27 +433,27 @@ conn_t	*cn = w->data;
 			 * 439 <msg-id> -- TAKETHIS, rejected
 			 */
 			case 238:
-				nsend++;
+				th->th_nsend++;
 				cn->cn_cq--;
 				send_article(cn, l);
 				break;
 
 			case 431:
-				ndefer++;
+				th->th_ndefer++;
 				cn->cn_cq--;
 				break;
 
 			case 438:
-				nrefuse++;
+				th->th_nrefuse++;
 				cn->cn_cq--;
 				break;
 
 			case 239:
-				naccept++;
+				th->th_naccept++;
 				break;
 
 			case 439:
-				nreject++;
+				th->th_nreject++;
 				break;
 			}
 

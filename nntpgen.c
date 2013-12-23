@@ -25,6 +25,7 @@
 #include	<ctype.h>
 #include	<assert.h>
 #include	<time.h>
+#include	<pthread.h>
 
 #include	<ev.h>
 
@@ -43,6 +44,24 @@ int		 debug;
 
 #define		ignore_errno(e) ((e) == EAGAIN || (e) == EINPROGRESS || (e) == EWOULDBLOCK)
 
+typedef struct thread {
+	pthread_t	 th_id;
+	struct ev_loop	*th_loop;
+	int		 th_artnum;
+	int		 th_nsend,
+			 th_naccept,
+			 th_ndefer, 
+			 th_nreject,
+			 th_nrefuse;
+	ev_timer	 th_stats;
+} thread_t;
+
+thread_t	*threads;
+int		 nthreads = 1;
+
+void	 do_thread_stats(struct ev_loop *, ev_timer *w, int);
+void	*thread_run(void *);
+
 typedef enum conn_state {
 	CN_CONNECTING,
 	CN_READ_GREETING,
@@ -58,6 +77,7 @@ typedef struct conn {
 	charq_t		*cn_rdbuf;
 	conn_state_t	 cn_state;
 	int		 cn_cq;
+	thread_t	*cn_thread;
 } conn_t;
 
 void	conn_read(struct ev_loop *, ev_io *, int);
@@ -68,14 +88,15 @@ void	send_article(conn_t *, char const *);
 
 void	do_stats(struct ev_loop *, ev_timer *w, int);
 
-struct ev_loop	*loop;
 ev_timer	 stats_timer;
 time_t		 start_time;
+
+struct ev_loop	*main_loop;
 
 void	 usage(char const *);
 
 int	nsend, naccept, ndefer, nreject, nrefuse;
-int	artnum;
+pthread_mutex_t	stats_mtx;
 
 void
 usage(p)
@@ -90,21 +111,23 @@ usage(p)
 "                         (default: %s)\n"
 "    -c <num>             number of connections to open\n"
 "                         (default: %d)\n"
+"    -t <num>             number of threads to use\n"
+"                         (default: %d)\n"
 "    -n <lines>           length of each article in lines\n"
 "                         (default: %d)\n"
 "    -D                   show data sent/received\n"
-, p, DEFAULT_DOMAIN, nconns, nlines);
+, p, DEFAULT_DOMAIN, nconns, nthreads, nlines);
 }
 
 int
 main(ac, av)
 	char	**av;
 {
-int	 c, i;
+int	 c, i, j;
 char	*progname = av[0], *p;
 struct addrinfo	*res, *r, hints;
 
-	while ((c = getopt(ac, av, "Vhd:c:l:D")) != -1) {
+	while ((c = getopt(ac, av, "Vhd:c:l:Dt:")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("nntpgen %s\n", PACKAGE_VERSION);
@@ -116,17 +139,23 @@ struct addrinfo	*res, *r, hints;
 			break;
 
 		case 'c':
-			nconns = atoi(optarg);
-			if (nconns <= 0) {
+			if ((nconns = atoi(optarg)) <= 0) {
 				fprintf(stderr, "%s: number of connections must be greater than zero\n",
 						progname);
 				return 1;
 			}
 			break;
 
+		case 't':
+			if ((nthreads = atoi(optarg)) <= 0) {
+				fprintf(stderr, "%s: number of threads must be greater than zero\n",
+						progname);
+				return 1;
+			}
+			break;
+
 		case 'l':
-			nlines = atoi(optarg);
-			if (nlines <= 0) {
+			if ((nlines = atoi(optarg)) <= 0) {
 				fprintf(stderr, "%s: number of lines must be greater than zero\n",
 						progname);
 				return 1;
@@ -165,8 +194,6 @@ struct addrinfo	*res, *r, hints;
 		port = strdup("119");
 	}
 
-	loop = ev_loop_new(ev_supported_backends());
-
 	bzero(&hints, sizeof(hints));
 	hints.ai_family = PF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -177,11 +204,25 @@ struct addrinfo	*res, *r, hints;
 		return 1;
 	}
 
-	for (i = 0; i < nconns; i++) {
-	conn_t	*conn = xcalloc(1, sizeof(*conn));
-	int	 fl, one = 1;
+	pthread_mutex_init(&stats_mtx, NULL);
+	main_loop = ev_loop_new(ev_supported_backends());
 
+	threads = xcalloc(nthreads, sizeof(thread_t));
+	for (i = 0; i < nthreads; i++) {
+	thread_t	*th = &threads[i];
+		th->th_loop = ev_loop_new(ev_supported_backends());
+		ev_timer_init(&th->th_stats, do_thread_stats, .1, .1);
+		th->th_stats.data = th;
+	}
+
+	for (i = 0, j = 0; i < nconns; i++, j = ((j == (nthreads-1)) ? 0 : j+1)) {
+	conn_t		*conn = xcalloc(1, sizeof(*conn));
+	thread_t	*th = &threads[j];
+	int		 fl, one = 1;
+
+printf("i=%d j=%d nthreads=%d\n", i, j, nthreads);
 		conn->cn_num = i + 1;
+		conn->cn_thread = th;
 
 		for (r = res; r; r = r->ai_next) {
 		char	 sname[NI_MAXHOST];
@@ -232,18 +273,33 @@ next:			;
 		conn->cn_rdbuf = cq_new();
 		conn->cn_wrbuf = cq_new();
 
-		ev_io_start(loop, &conn->cn_writable);
+		ev_io_start(th->th_loop, &conn->cn_writable);
 	}
 		
 	freeaddrinfo(res);
 
 	ev_timer_init(&stats_timer, do_stats, 1., 1.);
-	ev_timer_start(loop, &stats_timer);
+	ev_timer_start(main_loop, &stats_timer);
+
+	for (i = 0; i < nthreads; i++) {
+	thread_t	*th = &threads[i];
+		pthread_create(&th->th_id, NULL, thread_run, th);
+	}
 
 	time(&start_time);
-	ev_run(loop, 0);
+	ev_run(main_loop, 0);
 
 	return 0;
+}
+
+void *
+thread_run(p)
+	void	*p;
+{
+thread_t	*th = p;
+	ev_timer_start(th->th_loop, &th->th_stats);
+	ev_run(th->th_loop, 0);
+	return NULL;
 }
 
 #define MAX_PENDING 128
@@ -289,9 +345,11 @@ void
 conn_flush(cn)
 	conn_t	*cn;
 {
+thread_t	*th = cn->cn_thread;
+
 	if (cq_write(cn->cn_wrbuf, cn->cn_fd) < 0) {
 		if (ignore_errno(errno)) {
-			ev_io_start(loop, &cn->cn_writable);
+			ev_io_start(th->th_loop, &cn->cn_writable);
 			return;
 		}
 
@@ -300,7 +358,7 @@ conn_flush(cn)
 		exit(1);
 	}
 
-	ev_io_stop(loop, &cn->cn_writable);
+	ev_io_stop(th->th_loop, &cn->cn_writable);
 }
 
 void
@@ -445,9 +503,11 @@ time_t		upt = time(NULL) - start_time;
 	ct = (rus.ru_utime.tv_sec * 1000) + (rus.ru_utime.tv_usec / 1000)
 	   + (rus.ru_stime.tv_sec * 1000) + (rus.ru_stime.tv_usec / 1000);
 
+	pthread_mutex_lock(&stats_mtx);
 	printf("send it: %d/s, refused: %d/s, rejected: %d/s, deferred: %d/s, accepted: %d/s, cpu %.2f%%\n",
 		nsend, nrefuse, nreject, ndefer, naccept, (((double)ct / 1000) / upt) * 100);
 	nsend = nrefuse = nreject = ndefer = naccept = 0;
+	pthread_mutex_unlock(&stats_mtx);
 }
 
 void
@@ -487,4 +547,23 @@ time_t		 now;
 	cq_append(cn->cn_wrbuf, art, n);
 
 	conn_flush(cn);
+}
+
+void
+do_thread_stats(loop, w, revents)
+	struct ev_loop	*loop;
+	ev_timer	*w;
+{
+thread_t	*th = w->data;
+
+	pthread_mutex_lock(&stats_mtx);
+	nsend += th->th_nsend;
+	naccept += th->th_naccept;
+	ndefer += th->th_ndefer;
+	nreject += th->th_nreject;
+	nrefuse += th->th_nrefuse;
+	pthread_mutex_unlock(&stats_mtx);
+
+	th->th_nsend = th->th_naccept = th->th_ndefer = th->th_nreject
+		= th->th_nrefuse = 0;
 }

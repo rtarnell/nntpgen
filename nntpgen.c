@@ -520,7 +520,7 @@ send_article(cn, msgid)
 char		 art[512];
 int		 n;
 struct tm	*tim;
-time_t		 now;
+time_t		 now = (long) ev_now(cn->cn_thread->th_loop);
 
 	n = snprintf(art, sizeof(art), "TAKETHIS %s\r\n", msgid);
 	cq_append(cn->cn_wrbuf, art, n);
@@ -534,7 +534,6 @@ time_t		 now;
 	n = snprintf(art, sizeof(art), "From: nntpgen <nntpgen@nntpgen.localhost>\r\n");
 	cq_append(cn->cn_wrbuf, art, n);
 
-	time(&now);
 	tim = localtime(&now);
 	n = strftime(art, sizeof(art), "Date: %a, %d %b %Y %H:%M:%S %z\r\n", tim);
 	cq_append(cn->cn_wrbuf, art, n);

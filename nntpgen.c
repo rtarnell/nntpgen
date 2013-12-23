@@ -351,6 +351,11 @@ conn_flush(cn)
 {
 thread_t	*th = cn->cn_thread;
 
+	if (!cq_len(cn->cn_wrbuf)) {
+		ev_io_stop(th->th_loop, &cn->cn_writable);
+		return;
+	}
+
 	if (cq_write(cn->cn_wrbuf, cn->cn_fd) < 0) {
 		if (ignore_errno(errno)) {
 			ev_io_start(th->th_loop, &cn->cn_writable);
@@ -465,9 +470,12 @@ thread_t	*th = cn->cn_thread;
 
 		next:	;
 			conn_check(cn);
-			conn_flush(cn);
+			if (cq_len(cn->cn_wrbuf) > 8192)
+				conn_flush(cn);
 			free(ln);
 		}
+
+		conn_flush(cn);
 	}
 }
 

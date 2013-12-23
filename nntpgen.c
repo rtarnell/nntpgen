@@ -377,6 +377,7 @@ thread_t	*th = cn->cn_thread;
 				return;
 			printf("[%d] read error: %s\n",
 				cn->cn_num, strerror(errno));
+			exit(1);
 		}
 
 		while (ln = cq_read_line(cn->cn_rdbuf)) {

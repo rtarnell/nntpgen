@@ -54,6 +54,11 @@ typedef struct thread {
 			 th_nreject,
 			 th_nrefuse;
 	ev_timer	 th_stats;
+	char		 th_article_start[8192],
+			 th_article_end[8192];
+	size_t		 th_article_start_len,
+			 th_article_end_len;
+	time_t		 th_last_article;
 } thread_t;
 
 thread_t	*threads;
@@ -521,31 +526,45 @@ char		 art[512];
 int		 n;
 struct tm	*tim;
 time_t		 now = (long) ev_now(cn->cn_thread->th_loop);
+thread_t	*th = cn->cn_thread;
 
 	n = snprintf(art, sizeof(art), "TAKETHIS %s\r\n", msgid);
 	cq_append(cn->cn_wrbuf, art, n);
 
-	n = snprintf(art, sizeof(art), "Path: %s\r\n", "nntpgen");
-	cq_append(cn->cn_wrbuf, art, n);
+	if (!th->th_article_start[0] || (now - th->th_last_article > 5)) {
+		th->th_article_start[0] = 0;
+		th->th_article_end[0] = 0;
+
+		snprintf(art, sizeof(art), "Path: %s\r\n", "nntpgen");
+		strlcat(th->th_article_start, art, sizeof(th->th_article_start));
+
+		n = snprintf(art, sizeof(art), "From: nntpgen <nntpgen@nntpgen.localhost>\r\n");
+		strlcat(th->th_article_start, art, sizeof(th->th_article_start));
+
+		tim = localtime(&now);
+		n = strftime(art, sizeof(art), "Date: %a, %d %b %Y %H:%M:%S %z\r\n", tim);
+		strlcat(th->th_article_start, art, sizeof(th->th_article_start));
+
+		n = snprintf(art, sizeof(art), "Lines: 1\r\n");
+		strlcat(th->th_article_start, art, sizeof(th->th_article_start));
+
+		n = snprintf(art, sizeof(art), "Newsgroups: nntpgen.test\r\n");
+		strlcat(th->th_article_start, art, sizeof(th->th_article_start));
+
+		n = snprintf(art, sizeof(art), "\r\nThe data.\r\n.\r\n");
+		strlcat(th->th_article_end, art, sizeof(th->th_article_end));
+
+		th->th_article_start_len = strlen(th->th_article_start);
+		th->th_article_end_len = strlen(th->th_article_end);
+		th->th_last_article = now;
+	}
+
+	cq_append(cn->cn_wrbuf, th->th_article_start, th->th_article_start_len);
 
 	n = snprintf(art, sizeof(art), "Message-ID: %s\r\n", msgid);
 	cq_append(cn->cn_wrbuf, art, n);
 
-	n = snprintf(art, sizeof(art), "From: nntpgen <nntpgen@nntpgen.localhost>\r\n");
-	cq_append(cn->cn_wrbuf, art, n);
-
-	tim = localtime(&now);
-	n = strftime(art, sizeof(art), "Date: %a, %d %b %Y %H:%M:%S %z\r\n", tim);
-	cq_append(cn->cn_wrbuf, art, n);
-
-	n = snprintf(art, sizeof(art), "Lines: 1\r\n");
-	cq_append(cn->cn_wrbuf, art, n);
-
-	n = snprintf(art, sizeof(art), "Newsgroups: nntpgen.test\r\n");
-	cq_append(cn->cn_wrbuf, art, n);
-
-	n = snprintf(art, sizeof(art), "\r\nThe data.\r\n.\r\n");
-	cq_append(cn->cn_wrbuf, art, n);
+	cq_append(cn->cn_wrbuf, th->th_article_end, th->th_article_end_len);
 
 	conn_flush(cn);
 }

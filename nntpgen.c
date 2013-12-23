@@ -377,106 +377,103 @@ conn_read(loop, w, revents)
 {
 conn_t		*cn = w->data;
 thread_t	*th = cn->cn_thread;
+char		*ln;
+ssize_t		 n;
 
-	for (;;) {
-	char	*ln;
-	ssize_t	 n;
+	if ((n = cq_read(cn->cn_rdbuf, cn->cn_fd)) == -1) {
+		if (ignore_errno(errno))
+			return;
+		printf("[%d] read error: %s\n",
+			cn->cn_num, strerror(errno));
+		exit(1);
+	}
 
-		if ((n = cq_read(cn->cn_rdbuf, cn->cn_fd)) == -1) {
-			if (ignore_errno(errno))
-				return;
-			printf("[%d] read error: %s\n",
-				cn->cn_num, strerror(errno));
+	while (ln = cq_read_line(cn->cn_rdbuf)) {
+	char	*l;
+	int	 num;
+
+		if (debug)
+			printf("[%d] <- [%s]\n", cn->cn_num, ln);
+
+		if (strlen(ln) < 5) {
+			printf("[%d] response too short: [%s]\n",
+				cn->cn_num, ln);
 			exit(1);
 		}
 
-		while (ln = cq_read_line(cn->cn_rdbuf)) {
-		char	*l;
-		int	 num;
-
-			if (debug)
-				printf("[%d] <- [%s]\n", cn->cn_num, ln);
-
-			if (strlen(ln) < 5) {
-				printf("[%d] response too short: [%s]\n",
-					cn->cn_num, ln);
-				exit(1);
-			}
-
-			if (ln[3] != ' ') {
-				printf("[%d] invalid response: [%s]\n",
-					cn->cn_num, ln);
-				exit(1);
-			}
-
-			if (!isdigit(ln[0]) || !isdigit(ln[1]) || !isdigit(ln[2])) {
-				printf("[%d]: missing numeric: [%s]\n",
-					cn->cn_num, ln);
-				exit(1);
-			}
-
-			num = (ln[2] - '0') 
-			    + ((ln[1] - '0') * 10)
-			    + ((ln[0] - '0') * 100);
-			l = ln + 3;
-			while (isspace(*l))
-				l++;
-
-			if (cn->cn_state == CN_READ_GREETING) {
-				if (num != 200) {
-					printf("[%d] access denied: %d [%s]\n",
-						cn->cn_num, num, ln);
-					exit(1);
-				}
-
-				printf("[%d] connected\n", cn->cn_num);
-				cn->cn_state = CN_RUNNING;
-
-				goto next;
-			}
-
-			switch (num) {
-			/*
-			 * 238 <msg-id> -- CHECK, send the article
-			 * 431 <msg-id> -- CHECK, defer the article
-			 * 438 <msg-id> -- CHECK, never send the article
-			 * 239 <msg-id> -- TAKETHIS, accepted
-			 * 439 <msg-id> -- TAKETHIS, rejected
-			 */
-			case 238:
-				th->th_nsend++;
-				cn->cn_cq--;
-				send_article(cn, l);
-				break;
-
-			case 431:
-				th->th_ndefer++;
-				cn->cn_cq--;
-				break;
-
-			case 438:
-				th->th_nrefuse++;
-				cn->cn_cq--;
-				break;
-
-			case 239:
-				th->th_naccept++;
-				break;
-
-			case 439:
-				th->th_nreject++;
-				break;
-			}
-
-		next:	;
-			conn_check(cn);
-			if (cq_len(cn->cn_wrbuf) > 8192)
-				conn_flush(cn);
-			free(ln);
+		if (ln[3] != ' ') {
+			printf("[%d] invalid response: [%s]\n",
+				cn->cn_num, ln);
+			exit(1);
 		}
 
-		conn_flush(cn);
+		if (!isdigit(ln[0]) || !isdigit(ln[1]) || !isdigit(ln[2])) {
+			printf("[%d]: missing numeric: [%s]\n",
+				cn->cn_num, ln);
+			exit(1);
+		}
+
+		num = (ln[2] - '0') 
+		    + ((ln[1] - '0') * 10)
+		    + ((ln[0] - '0') * 100);
+		l = ln + 3;
+		while (isspace(*l))
+			l++;
+
+		if (cn->cn_state == CN_READ_GREETING) {
+			if (num != 200) {
+				printf("[%d] access denied: %d [%s]\n",
+					cn->cn_num, num, ln);
+				exit(1);
+			}
+
+			printf("[%d] connected\n", cn->cn_num);
+			cn->cn_state = CN_RUNNING;
+
+			goto next;
+		}
+
+		switch (num) {
+		/*
+		 * 238 <msg-id> -- CHECK, send the article
+		 * 431 <msg-id> -- CHECK, defer the article
+		 * 438 <msg-id> -- CHECK, never send the article
+		 * 239 <msg-id> -- TAKETHIS, accepted
+		 * 439 <msg-id> -- TAKETHIS, rejected
+		 */
+		case 238:
+			th->th_nsend++;
+			cn->cn_cq--;
+			send_article(cn, l);
+			break;
+
+		case 431:
+			th->th_ndefer++;
+			cn->cn_cq--;
+			break;
+
+		case 438:
+			th->th_nrefuse++;
+			cn->cn_cq--;
+			break;
+
+		case 239:
+			th->th_naccept++;
+			break;
+
+		case 439:
+			th->th_nreject++;
+			break;
+		}
+
+	next:	;
+		conn_check(cn);
+		if (cq_len(cn->cn_wrbuf) > 8192)
+			conn_flush(cn);
+		free(ln);
 	}
+
+	conn_flush(cn);
 }
 
 void *

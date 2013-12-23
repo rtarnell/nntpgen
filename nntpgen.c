@@ -220,7 +220,6 @@ struct addrinfo	*res, *r, hints;
 	thread_t	*th = &threads[j];
 	int		 fl, one = 1;
 
-printf("i=%d j=%d nthreads=%d\n", i, j, nthreads);
 		conn->cn_num = i + 1;
 		conn->cn_thread = th;
 
